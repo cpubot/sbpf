@@ -306,7 +306,7 @@ pub struct EbpfVm<'a, C: ContextObject> {
     /// MemoryMapping inlined
     pub memory_mapping: MemoryMapping,
     /// Stack of CallFrames used by the Interpreter
-    pub call_frames: Vec<CallFrame>,
+    pub call_frames: &'a mut [CallFrame],
     /// Loader built-in program
     pub loader: Arc<BuiltinProgram<C>>,
     /// Collector for the instruction trace
@@ -327,6 +327,7 @@ impl<'a, C: ContextObject> EbpfVm<'a, C> {
         context_object: &'a mut C,
         mut memory_mapping: MemoryMapping,
         stack_len: usize,
+        call_frames: &'a mut [CallFrame],
     ) -> Self {
         let config = loader.get_config();
         let mut registers = [0u64; 12];
@@ -350,7 +351,7 @@ impl<'a, C: ContextObject> EbpfVm<'a, C> {
             registers,
             program_result: ProgramResult::Ok(0),
             memory_mapping,
-            call_frames: vec![CallFrame::default(); config.max_call_depth],
+            call_frames,
             loader,
             #[cfg(feature = "debugger")]
             debug_port: std::env::var("VM_DEBUG_PORT")
