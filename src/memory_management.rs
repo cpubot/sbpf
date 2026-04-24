@@ -84,27 +84,66 @@ pub fn get_system_page_size() -> usize {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
+const HUGE_PAGE_SIZE: usize = 2 * 1024 * 1024; // 2MiB
+
+#[cfg(target_os = "windows")]
+const HUGE_PAGE_SIZE: usize = usize::MAX;
+
+#[cfg(not(target_os = "windows"))]
+pub fn is_huge_page_allocation(size_in_bytes: usize) -> bool {
+    size_in_bytes >= HUGE_PAGE_SIZE
+}
+
+#[cfg(target_os = "windows")]
+pub fn is_huge_page_allocation(_size_in_bytes: usize) -> bool {
+    false
+}
+
 pub fn round_to_page_size(value: usize, page_size: usize) -> usize {
-    value
-        .saturating_add(page_size)
-        .saturating_sub(1)
-        .checked_div(page_size)
-        .unwrap()
-        .saturating_mul(page_size)
+    let rounded = round_up(value, page_size);
+    if rounded >= HUGE_PAGE_SIZE {
+        round_up(rounded, HUGE_PAGE_SIZE)
+    } else {
+        rounded
+    }
+}
+
+#[inline]
+fn round_up(value: usize, align: usize) -> usize {
+    value.div_ceil(align).saturating_mul(align)
 }
 
 pub unsafe fn allocate_pages(size_in_bytes: usize) -> Result<*mut u8, EbpfError> {
     let mut raw: *mut c_void = std::ptr::null_mut();
     #[cfg(not(target_os = "windows"))]
-    libc_error_guard!(
-        mmap,
-        &mut raw,
-        size_in_bytes,
-        libc::PROT_READ | libc::PROT_WRITE,
-        libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
-        -1,
-        0,
-    );
+    {
+        if size_in_bytes >= HUGE_PAGE_SIZE {
+            let ptr = libc::mmap(
+                std::ptr::null_mut(),
+                size_in_bytes,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_ANONYMOUS | libc::MAP_PRIVATE | libc::MAP_HUGETLB | libc::MAP_HUGE_2MB,
+                -1,
+                0,
+            );
+            if ptr != libc::MAP_FAILED {
+                return Ok(ptr.cast::<u8>());
+            }
+            let err = std::io::Error::last_os_error();
+            log::error!("hugetlb mmap failed for {size_in_bytes} bytes: {err}");
+        }
+
+        libc_error_guard!(
+            mmap,
+            &mut raw,
+            size_in_bytes,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
+            -1,
+            0,
+        );
+    }
     #[cfg(target_os = "windows")]
     winapi_error_guard!(
         VirtualAlloc,
